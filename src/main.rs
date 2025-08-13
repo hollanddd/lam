@@ -16,7 +16,7 @@ use std::path::PathBuf;
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     let terminal = ratatui::init();
-    
+
     // Create app and run with async loading
     let result = App::run_with_loading(terminal).await;
     ratatui::restore();
@@ -236,36 +236,36 @@ impl App {
         app.loading_message = "📂 Loading User LaunchAgents...".to_string();
         app.loading_progress = 0.1;
         let user_agents = Self::load_launch_agents(&app.user_agents_dir)?;
-        
+
         app.loading_message = "🌐 Loading Global LaunchAgents...".to_string();
         app.loading_progress = 0.4;
         let global_agents = Self::load_launch_agents(&app.global_agents_dir)?;
-        
+
         app.loading_message = "🍎 Loading Apple LaunchAgents...".to_string();
         app.loading_progress = 0.7;
         let apple_agents = Self::load_launch_agents(&app.apple_agents_dir)?;
-        
+
         app.loading_message = "✨ Finalizing interface...".to_string();
         app.loading_progress = 0.9;
-        
+
         // Update the app with loaded data
         app.user_agents = user_agents;
         app.global_agents = global_agents;
         app.apple_agents = apple_agents;
-        
+
         let mut list_state = ListState::default();
         if !app.user_agents.is_empty() {
             list_state.select(Some(0));
         }
         app.list_state = list_state;
-        
+
         // Complete loading
         app.loading = false;
         app.loading_progress = 1.0;
-        
+
         Ok(app)
     }
-    
+
     pub fn new_with_loading() -> Self {
         Self {
             running: false,
@@ -425,30 +425,33 @@ impl App {
         // Create app with loading state
         let mut app = App::new_with_loading();
         app.running = true;
-        
+
         // Show loading screen and load data asynchronously
-        let loading_task = tokio::spawn(async move {
-            App::new().await
-        });
-        
+        let loading_task = tokio::spawn(async move { App::new().await });
+
         // Keep showing loading screen until data is loaded
         loop {
             terminal.draw(|frame| app.draw_loading_screen(frame))?;
-            
+
             // Handle any key events during loading (like quit)
             if let Ok(event) = tokio::time::timeout(
                 tokio::time::Duration::from_millis(50),
-                app.event_stream.next()
-            ).await {
+                app.event_stream.next(),
+            )
+            .await
+            {
                 if let Some(Ok(crossterm::event::Event::Key(key))) = event {
-                    if matches!(key.code, crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('q')) 
-                        && key.kind == crossterm::event::KeyEventKind::Press {
+                    if matches!(
+                        key.code,
+                        crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('q')
+                    ) && key.kind == crossterm::event::KeyEventKind::Press
+                    {
                         app.running = false;
                         break;
                     }
                 }
             }
-            
+
             // Check if loading is complete
             if loading_task.is_finished() {
                 match loading_task.await {
@@ -461,14 +464,14 @@ impl App {
                     Err(e) => return Err(color_eyre::eyre::eyre!("Loading task failed: {}", e)),
                 }
             }
-            
+
             // Update loading animation
             app.loading_step = app.loading_step.wrapping_add(1);
-            
+
             // Small delay for animation
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
-        
+
         // Run the main application if not quit during loading
         if app.running {
             app.run(terminal).await
@@ -476,7 +479,7 @@ impl App {
             Ok(())
         }
     }
-    
+
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         self.running = true;
         while self.running {
@@ -492,7 +495,7 @@ impl App {
             self.draw_loading_screen(frame);
             return;
         }
-        
+
         // Clear background with theme color
         let background = Block::default().style(Style::default().bg(Theme::BACKGROUND));
         frame.render_widget(background, frame.area());
@@ -1368,12 +1371,12 @@ impl App {
 
         frame.render_widget(confirmation_dialog, popup_area);
     }
-    
+
     fn draw_loading_screen(&mut self, frame: &mut Frame) {
         // Clear background with theme color
         let background = Block::default().style(Style::default().bg(Theme::BACKGROUND));
         frame.render_widget(background, frame.area());
-        
+
         // Create centered loading area
         let area = frame.area();
         let loading_area = Layout::default()
@@ -1384,7 +1387,7 @@ impl App {
                 Constraint::Percentage(25),
             ])
             .split(area)[1];
-            
+
         let loading_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1393,27 +1396,26 @@ impl App {
                 Constraint::Percentage(15),
             ])
             .split(loading_area)[1];
-        
+
         // Animated spinner characters
         let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let spinner_index = (self.loading_step as usize) % spinner_chars.len();
         let spinner = spinner_chars[spinner_index];
-        
+
         // Create progress bar
         let progress_width = loading_area.width.saturating_sub(6) as f32;
         let filled_width = (progress_width * self.loading_progress) as u16;
-        let progress_bar = "█".repeat(filled_width as usize) + &"░".repeat((progress_width as u16).saturating_sub(filled_width) as usize);
-        
+        let progress_bar = "█".repeat(filled_width as usize)
+            + &"░".repeat((progress_width as u16).saturating_sub(filled_width) as usize);
+
         let loading_content = vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "🚀 Launch Agent Manager",
-                    Style::default()
-                        .fg(Theme::ACCENT_PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                "🚀 Launch Agent Manager",
+                Style::default()
+                    .fg(Theme::ACCENT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            )]),
             Line::from(""),
             Line::from(vec![
                 Span::styled(
@@ -1428,23 +1430,23 @@ impl App {
                 ),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("[{}] {}%", progress_bar, (self.loading_progress * 100.0) as u8),
-                    Style::default().fg(Theme::ACCENT_MUTED),
+            Line::from(vec![Span::styled(
+                format!(
+                    "[{}] {}%",
+                    progress_bar,
+                    (self.loading_progress * 100.0) as u8
                 ),
-            ]),
+                Style::default().fg(Theme::ACCENT_MUTED),
+            )]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "Loading launch agents and checking status...",
-                    Style::default()
-                        .fg(Theme::TEXT_DIM)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                "Loading launch agents and checking status...",
+                Style::default()
+                    .fg(Theme::TEXT_DIM)
+                    .add_modifier(Modifier::ITALIC),
+            )]),
         ];
-        
+
         let loading_widget = Paragraph::new(loading_content)
             .block(
                 Block::default()
@@ -1456,9 +1458,9 @@ impl App {
             )
             .alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().bg(Theme::BACKGROUND));
-            
+
         frame.render_widget(loading_widget, loading_area);
-        
+
         // Update spinner animation
         self.loading_step = self.loading_step.wrapping_add(1);
     }
