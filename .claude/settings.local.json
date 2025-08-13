@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "WebFetch(domain:uithub.com)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
