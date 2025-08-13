@@ -13,6 +13,7 @@ jobs:
 
   # Release unpublished packages.
   release-plz-release:
+    environment: release
     name: Release-plz release
     runs-on: ubuntu-latest
     if: ${{ github.repository_owner == 'hollanddd' }}
