@@ -61,6 +61,7 @@ pub struct App {
     status_timer: u32,
     filter_text: String,
     showing_exit_confirmation: bool,
+    form_scroll_offset: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -115,12 +116,27 @@ impl TabLocation {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LimitLoadToSessionType {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl Default for LimitLoadToSessionType {
+    fn default() -> Self {
+        LimitLoadToSessionType::Single(String::new())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PlistData {
     #[serde(rename = "Label")]
     pub label: Option<String>,
     #[serde(rename = "ProgramArguments")]
     pub program_arguments: Option<Vec<String>>,
+    #[serde(rename = "Program")]
+    pub program: Option<String>,
     #[serde(rename = "StartInterval")]
     pub start_interval: Option<i32>,
     #[serde(rename = "RunAtLoad")]
@@ -133,18 +149,46 @@ pub struct PlistData {
     pub standard_error_path: Option<String>,
     #[serde(rename = "WorkingDirectory")]
     pub working_directory: Option<String>,
+    #[serde(rename = "EnvironmentVariables")]
+    pub environment_variables: Option<std::collections::HashMap<String, String>>,
+    #[serde(rename = "LimitLoadToSessionType")]
+    pub limit_load_to_session_type: Option<LimitLoadToSessionType>,
+    #[serde(rename = "AbandonProcessGroup")]
+    pub abandon_process_group: Option<bool>,
+    #[serde(rename = "AssociatedBundleIdentifiers")]
+    pub associated_bundle_identifiers: Option<Vec<String>>,
+    #[serde(rename = "ThrottleInterval")]
+    pub throttle_interval: Option<i32>,
+    #[serde(rename = "POSIXSpawnType")]
+    pub posix_spawn_type: Option<String>,
+    #[serde(rename = "EnablePressuredExit")]
+    pub enable_pressured_exit: Option<bool>,
+    #[serde(rename = "EnableTransactions")]
+    pub enable_transactions: Option<bool>,
+    #[serde(rename = "EventMonitor")]
+    pub event_monitor: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum FormField {
     Label,
     ProgramArguments,
+    Program,
     StartInterval,
     RunAtLoad,
     KeepAlive,
     StandardOutPath,
     StandardErrorPath,
     WorkingDirectory,
+    EnvironmentVariables,
+    LimitLoadToSessionType,
+    AbandonProcessGroup,
+    AssociatedBundleIdentifiers,
+    ThrottleInterval,
+    POSIXSpawnType,
+    EnablePressuredExit,
+    EnableTransactions,
+    EventMonitor,
 }
 
 impl App {
@@ -183,6 +227,7 @@ impl App {
             status_timer: 0,
             filter_text: String::new(),
             showing_exit_confirmation: false,
+            form_scroll_offset: 0,
         })
     }
 
@@ -301,6 +346,7 @@ impl App {
 
                 let plist_data = self.parse_plist(&content)?;
                 self.selected_plist = Some(plist_data);
+                self.form_scroll_offset = 0; // Reset scroll position for new plist
             }
         }
         Ok(())
@@ -591,12 +637,36 @@ impl App {
                 .start_interval
                 .map(|i| i.to_string())
                 .unwrap_or_default();
+            let throttle_interval_str = plist
+                .throttle_interval
+                .map(|i| i.to_string())
+                .unwrap_or_default();
             let run_at_load_str = if plist.run_at_load.unwrap_or(false) {
                 "true"
             } else {
                 "false"
             };
             let keep_alive_str = if plist.keep_alive.unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            };
+            let abandon_process_group_str = if plist.abandon_process_group.unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            };
+            let enable_pressured_exit_str = if plist.enable_pressured_exit.unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            };
+            let enable_transactions_str = if plist.enable_transactions.unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            };
+            let event_monitor_str = if plist.event_monitor.unwrap_or(false) {
                 "true"
             } else {
                 "false"
@@ -609,12 +679,27 @@ impl App {
                     plist.label.as_deref().unwrap_or(""),
                 ),
                 (
+                    FormField::Program,
+                    "⚙️  Program",
+                    plist.program.as_deref().unwrap_or(""),
+                ),
+                (
                     FormField::StartInterval,
                     "⏰ Start Interval",
                     &start_interval_str,
                 ),
+                (
+                    FormField::ThrottleInterval,
+                    "⏱️  Throttle Interval",
+                    &throttle_interval_str,
+                ),
                 (FormField::RunAtLoad, "🚀 Run At Load", run_at_load_str),
                 (FormField::KeepAlive, "💓 Keep Alive", keep_alive_str),
+                (
+                    FormField::AbandonProcessGroup,
+                    "🔄 Abandon Process Group",
+                    abandon_process_group_str,
+                ),
                 (
                     FormField::StandardOutPath,
                     "📄 Stdout Path",
@@ -629,6 +714,26 @@ impl App {
                     FormField::WorkingDirectory,
                     "📁 Working Directory",
                     plist.working_directory.as_deref().unwrap_or(""),
+                ),
+                (
+                    FormField::POSIXSpawnType,
+                    "🔧 POSIX Spawn Type",
+                    plist.posix_spawn_type.as_deref().unwrap_or(""),
+                ),
+                (
+                    FormField::EnablePressuredExit,
+                    "🚪 Enable Pressured Exit",
+                    enable_pressured_exit_str,
+                ),
+                (
+                    FormField::EnableTransactions,
+                    "🔒 Enable Transactions",
+                    enable_transactions_str,
+                ),
+                (
+                    FormField::EventMonitor,
+                    "👁️  Event Monitor",
+                    event_monitor_str,
                 ),
             ];
 
@@ -671,13 +776,17 @@ impl App {
                     value.to_string()
                 };
 
-                // Add some spacing between fields
+                // Add spacing between fields
                 if i > 0 {
                     text.push(Line::from(""));
                 }
 
+                // Label on its own line
+                text.push(Line::from(vec![Span::styled(*label, label_style)]));
+
+                // Value on next line with indentation
                 text.push(Line::from(vec![
-                    Span::styled(format!("{:<20}", label), label_style),
+                    Span::raw("  "),
                     Span::styled(display_value, value_style),
                 ]));
             }
@@ -727,20 +836,205 @@ impl App {
                 }
             }
 
+            // Display Associated Bundle Identifiers
+            if let Some(ids) = &plist.associated_bundle_identifiers {
+                let is_current = self.focus == Focus::Form
+                    && self.current_field == FormField::AssociatedBundleIdentifiers;
+                let is_editing = self.editing
+                    && self.editing_field.as_ref() == Some(&FormField::AssociatedBundleIdentifiers);
+
+                let label_style = if is_current {
+                    Style::default()
+                        .fg(Theme::ACCENT_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(Theme::ACCENT_MUTED)
+                        .add_modifier(Modifier::BOLD)
+                };
+
+                text.push(Line::from(""));
+                text.push(Line::from(vec![Span::styled(
+                    "📦 Associated Bundle Identifiers:",
+                    label_style,
+                )]));
+                text.push(Line::from(""));
+
+                for (i, id) in ids.iter().enumerate() {
+                    let id_style = if is_editing {
+                        Style::default()
+                            .fg(Theme::BACKGROUND)
+                            .bg(Theme::ACCENT_WARNING)
+                    } else if is_current {
+                        Style::default()
+                            .fg(Theme::ACCENT_PRIMARY)
+                            .bg(Theme::HIGHLIGHT)
+                    } else {
+                        Style::default().fg(Theme::FOREGROUND)
+                    };
+                    text.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(format!("[{}] ", i), Style::default().fg(Theme::TEXT_DIM)),
+                        Span::styled(id, id_style),
+                    ]));
+                }
+            }
+
+            // Display Limit Load To Session Type
+            if let Some(session_type) = &plist.limit_load_to_session_type {
+                let is_current = self.focus == Focus::Form
+                    && self.current_field == FormField::LimitLoadToSessionType;
+                let is_editing = self.editing
+                    && self.editing_field.as_ref() == Some(&FormField::LimitLoadToSessionType);
+
+                let label_style = if is_current {
+                    Style::default()
+                        .fg(Theme::ACCENT_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(Theme::ACCENT_MUTED)
+                        .add_modifier(Modifier::BOLD)
+                };
+
+                text.push(Line::from(""));
+                text.push(Line::from(vec![Span::styled(
+                    "🔒 Limit Load To Session Type:",
+                    label_style,
+                )]));
+                text.push(Line::from(""));
+
+                match session_type {
+                    LimitLoadToSessionType::Single(s) => {
+                        let session_style = if is_editing {
+                            Style::default()
+                                .fg(Theme::BACKGROUND)
+                                .bg(Theme::ACCENT_WARNING)
+                        } else if is_current {
+                            Style::default()
+                                .fg(Theme::ACCENT_PRIMARY)
+                                .bg(Theme::HIGHLIGHT)
+                        } else {
+                            Style::default().fg(Theme::FOREGROUND)
+                        };
+                        text.push(Line::from(vec![
+                            Span::raw("    "),
+                            Span::styled(s, session_style),
+                        ]));
+                    }
+                    LimitLoadToSessionType::Multiple(sessions) => {
+                        for (i, session) in sessions.iter().enumerate() {
+                            let session_style = if is_editing {
+                                Style::default()
+                                    .fg(Theme::BACKGROUND)
+                                    .bg(Theme::ACCENT_WARNING)
+                            } else if is_current {
+                                Style::default()
+                                    .fg(Theme::ACCENT_PRIMARY)
+                                    .bg(Theme::HIGHLIGHT)
+                            } else {
+                                Style::default().fg(Theme::FOREGROUND)
+                            };
+                            text.push(Line::from(vec![
+                                Span::raw("    "),
+                                Span::styled(
+                                    format!("[{}] ", i),
+                                    Style::default().fg(Theme::TEXT_DIM),
+                                ),
+                                Span::styled(session, session_style),
+                            ]));
+                        }
+                    }
+                }
+            }
+
+            // Display Environment Variables
+            if let Some(env_vars) = &plist.environment_variables {
+                let is_current = self.focus == Focus::Form
+                    && self.current_field == FormField::EnvironmentVariables;
+                let is_editing = self.editing
+                    && self.editing_field.as_ref() == Some(&FormField::EnvironmentVariables);
+
+                let label_style = if is_current {
+                    Style::default()
+                        .fg(Theme::ACCENT_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(Theme::ACCENT_MUTED)
+                        .add_modifier(Modifier::BOLD)
+                };
+
+                text.push(Line::from(""));
+                text.push(Line::from(vec![Span::styled(
+                    "🌍 Environment Variables:",
+                    label_style,
+                )]));
+                text.push(Line::from(""));
+
+                for (key, value) in env_vars.iter() {
+                    let env_style = if is_editing {
+                        Style::default()
+                            .fg(Theme::BACKGROUND)
+                            .bg(Theme::ACCENT_WARNING)
+                    } else if is_current {
+                        Style::default()
+                            .fg(Theme::ACCENT_PRIMARY)
+                            .bg(Theme::HIGHLIGHT)
+                    } else {
+                        Style::default().fg(Theme::FOREGROUND)
+                    };
+                    text.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(
+                            format!("{}=", key),
+                            Style::default().fg(Theme::ACCENT_MUTED),
+                        ),
+                        Span::styled(value, env_style),
+                    ]));
+                }
+            }
+
+            // Create title with scroll indicators
+            let total_content_height = text.len() as u16;
+            let viewport_height = 20; // Approximate visible lines
+            let can_scroll_up = self.form_scroll_offset > 0;
+            let can_scroll_down = total_content_height > viewport_height + self.form_scroll_offset;
+
+            let mut title_spans = vec![Span::styled("⚙️  Agent Editor", title_style)];
+
+            if can_scroll_up || can_scroll_down {
+                title_spans.push(Span::raw(" "));
+                if can_scroll_up {
+                    title_spans.push(Span::styled(
+                        "↑",
+                        Style::default().fg(Theme::ACCENT_SECONDARY),
+                    ));
+                }
+                if can_scroll_down {
+                    title_spans.push(Span::styled(
+                        "↓",
+                        Style::default().fg(Theme::ACCENT_SECONDARY),
+                    ));
+                }
+                title_spans.push(Span::styled(
+                    " [PgUp/PgDn]",
+                    Style::default().fg(Theme::TEXT_DIM),
+                ));
+            }
+
             let paragraph = Paragraph::new(text)
                 .block(
                     Block::default()
-                        .title(Line::from(vec![Span::styled(
-                            "⚙️  Agent Editor",
-                            title_style,
-                        )]))
+                        .title(Line::from(title_spans))
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .border_style(border_style)
                         .style(Style::default().bg(Theme::BACKGROUND))
                         .padding(ratatui::widgets::Padding::uniform(1)),
                 )
-                .wrap(Wrap { trim: true });
+                .wrap(Wrap { trim: true })
+                .scroll((self.form_scroll_offset, 0));
 
             frame.render_widget(paragraph, area);
         } else {
@@ -814,25 +1108,38 @@ impl App {
                     "🔍",
                 ),
                 Focus::Sidebar => (
-                    "●=Running ○=Stopped ◉=Enabled | j/k=Navigate, Enter=Load, /=Search, 1/2/3=Switch Tabs"
-                        .to_string(),
+                    "j/k=Navigate, Enter=Load, /=Search, 1/2/3=Switch Tabs".to_string(),
                     "📋",
                 ),
                 Focus::Form => (
-                    "j/k=Navigate Fields, Enter=Edit, Ctrl+S=Save | Tab=Switch Panel, 1/2/3=Switch Tabs".to_string(),
+                    "j/k=Navigate Fields, Enter=Edit, PgUp/PgDn=Scroll, Ctrl+S=Save | Tab=Switch Panel, 1/2/3=Switch Tabs".to_string(),
                     "⚙️",
                 ),
             };
             (text, Style::default().fg(Theme::ACCENT_MUTED), icon)
         };
 
-        let status_line = Line::from(vec![
-            Span::styled(
-                format!("{} ", icon),
-                Style::default().fg(Theme::ACCENT_PRIMARY),
-            ),
-            Span::styled(status_text, status_style),
-        ]);
+        let mut status_spans = vec![Span::styled(
+            format!("{} ", icon),
+            Style::default().fg(Theme::ACCENT_PRIMARY),
+        )];
+
+        // Add colored legend for sidebar
+        if self.focus == Focus::Sidebar {
+            // Add status legend with proper colors
+            status_spans.extend(vec![
+                Span::styled("●", Style::default().fg(Theme::ACCENT_SECONDARY)), // Running (Green)
+                Span::styled("=Running ", Style::default().fg(Theme::FOREGROUND)),
+                Span::styled("●", Style::default().fg(Theme::ACCENT_ERROR)), // Stopped (Red)
+                Span::styled("=Stopped ", Style::default().fg(Theme::FOREGROUND)),
+                Span::styled("◉", Style::default().fg(Theme::ACCENT_MUTED)), // Enabled (Cyan)
+                Span::styled("=Enabled | ", Style::default().fg(Theme::FOREGROUND)),
+            ]);
+        }
+
+        status_spans.push(Span::styled(status_text, status_style));
+
+        let status_line = Line::from(status_spans);
 
         let status_paragraph = Paragraph::new(vec![status_line])
             .block(
@@ -940,12 +1247,22 @@ impl App {
         match self.current_field {
             FormField::Label => "Label",
             FormField::ProgramArguments => "Program Arguments",
+            FormField::Program => "Program",
             FormField::StartInterval => "Start Interval",
             FormField::RunAtLoad => "Run At Load",
             FormField::KeepAlive => "Keep Alive",
             FormField::StandardOutPath => "Standard Out Path",
             FormField::StandardErrorPath => "Standard Error Path",
             FormField::WorkingDirectory => "Working Directory",
+            FormField::EnvironmentVariables => "Environment Variables",
+            FormField::LimitLoadToSessionType => "Limit Load To Session Type",
+            FormField::AbandonProcessGroup => "Abandon Process Group",
+            FormField::AssociatedBundleIdentifiers => "Associated Bundle Identifiers",
+            FormField::ThrottleInterval => "Throttle Interval",
+            FormField::POSIXSpawnType => "POSIX Spawn Type",
+            FormField::EnablePressuredExit => "Enable Pressured Exit",
+            FormField::EnableTransactions => "Enable Transactions",
+            FormField::EventMonitor => "Event Monitor",
         }
     }
 
@@ -954,12 +1271,22 @@ impl App {
             match editing_field {
                 FormField::Label => "Label",
                 FormField::ProgramArguments => "Program Arguments",
+                FormField::Program => "Program",
                 FormField::StartInterval => "Start Interval",
                 FormField::RunAtLoad => "Run At Load",
                 FormField::KeepAlive => "Keep Alive",
                 FormField::StandardOutPath => "Standard Out Path",
                 FormField::StandardErrorPath => "Standard Error Path",
                 FormField::WorkingDirectory => "Working Directory",
+                FormField::EnvironmentVariables => "Environment Variables",
+                FormField::LimitLoadToSessionType => "Limit Load To Session Type",
+                FormField::AbandonProcessGroup => "Abandon Process Group",
+                FormField::AssociatedBundleIdentifiers => "Associated Bundle Identifiers",
+                FormField::ThrottleInterval => "Throttle Interval",
+                FormField::POSIXSpawnType => "POSIX Spawn Type",
+                FormField::EnablePressuredExit => "Enable Pressured Exit",
+                FormField::EnableTransactions => "Enable Transactions",
+                FormField::EventMonitor => "Event Monitor",
             }
         } else {
             "Unknown"
@@ -1129,34 +1456,98 @@ impl App {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.current_field = match self.current_field {
-                    FormField::Label => FormField::ProgramArguments,
+                    FormField::Label => FormField::Program,
+                    FormField::Program => FormField::ProgramArguments,
                     FormField::ProgramArguments => FormField::StartInterval,
-                    FormField::StartInterval => FormField::RunAtLoad,
+                    FormField::StartInterval => FormField::ThrottleInterval,
+                    FormField::ThrottleInterval => FormField::RunAtLoad,
                     FormField::RunAtLoad => FormField::KeepAlive,
-                    FormField::KeepAlive => FormField::StandardOutPath,
+                    FormField::KeepAlive => FormField::AbandonProcessGroup,
+                    FormField::AbandonProcessGroup => FormField::StandardOutPath,
                     FormField::StandardOutPath => FormField::StandardErrorPath,
                     FormField::StandardErrorPath => FormField::WorkingDirectory,
-                    FormField::WorkingDirectory => FormField::Label,
+                    FormField::WorkingDirectory => FormField::POSIXSpawnType,
+                    FormField::POSIXSpawnType => FormField::EnablePressuredExit,
+                    FormField::EnablePressuredExit => FormField::EnableTransactions,
+                    FormField::EnableTransactions => FormField::EventMonitor,
+                    FormField::EventMonitor => FormField::LimitLoadToSessionType,
+                    FormField::LimitLoadToSessionType => FormField::AssociatedBundleIdentifiers,
+                    FormField::AssociatedBundleIdentifiers => FormField::EnvironmentVariables,
+                    FormField::EnvironmentVariables => FormField::Label,
                 };
+                self.auto_scroll_to_current_field();
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.current_field = match self.current_field {
-                    FormField::Label => FormField::WorkingDirectory,
-                    FormField::ProgramArguments => FormField::Label,
+                    FormField::Label => FormField::EnvironmentVariables,
+                    FormField::Program => FormField::Label,
+                    FormField::ProgramArguments => FormField::Program,
                     FormField::StartInterval => FormField::ProgramArguments,
-                    FormField::RunAtLoad => FormField::StartInterval,
+                    FormField::ThrottleInterval => FormField::StartInterval,
+                    FormField::RunAtLoad => FormField::ThrottleInterval,
                     FormField::KeepAlive => FormField::RunAtLoad,
-                    FormField::StandardOutPath => FormField::KeepAlive,
+                    FormField::AbandonProcessGroup => FormField::KeepAlive,
+                    FormField::StandardOutPath => FormField::AbandonProcessGroup,
                     FormField::StandardErrorPath => FormField::StandardOutPath,
                     FormField::WorkingDirectory => FormField::StandardErrorPath,
+                    FormField::POSIXSpawnType => FormField::WorkingDirectory,
+                    FormField::EnablePressuredExit => FormField::POSIXSpawnType,
+                    FormField::EnableTransactions => FormField::EnablePressuredExit,
+                    FormField::EventMonitor => FormField::EnableTransactions,
+                    FormField::LimitLoadToSessionType => FormField::EventMonitor,
+                    FormField::AssociatedBundleIdentifiers => FormField::LimitLoadToSessionType,
+                    FormField::EnvironmentVariables => FormField::AssociatedBundleIdentifiers,
                 };
+                self.auto_scroll_to_current_field();
             }
             KeyCode::Enter => {
                 self.start_editing()?;
             }
+            KeyCode::PageUp => {
+                self.form_scroll_offset = self.form_scroll_offset.saturating_sub(5);
+            }
+            KeyCode::PageDown => {
+                self.form_scroll_offset = self.form_scroll_offset.saturating_add(5);
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    fn auto_scroll_to_current_field(&mut self) {
+        // Calculate approximate line position of current field in the form
+        let field_position = match self.current_field {
+            FormField::Label => 0,
+            FormField::Program => 3,
+            FormField::ProgramArguments => 6,
+            FormField::StartInterval => 9,
+            FormField::ThrottleInterval => 12,
+            FormField::RunAtLoad => 15,
+            FormField::KeepAlive => 18,
+            FormField::AbandonProcessGroup => 21,
+            FormField::StandardOutPath => 24,
+            FormField::StandardErrorPath => 27,
+            FormField::WorkingDirectory => 30,
+            FormField::POSIXSpawnType => 33,
+            FormField::EnablePressuredExit => 36,
+            FormField::EnableTransactions => 39,
+            FormField::EventMonitor => 42,
+            FormField::LimitLoadToSessionType => 45,
+            FormField::AssociatedBundleIdentifiers => 50,
+            FormField::EnvironmentVariables => 55,
+        };
+
+        // Ensure the field is visible with some padding
+        const VIEWPORT_HEIGHT: u16 = 20; // Approximate form panel height
+        const PADDING: u16 = 3;
+
+        if field_position < self.form_scroll_offset + PADDING {
+            // Field is above visible area, scroll up
+            self.form_scroll_offset = field_position.saturating_sub(PADDING);
+        } else if field_position > self.form_scroll_offset + VIEWPORT_HEIGHT - PADDING {
+            // Field is below visible area, scroll down
+            self.form_scroll_offset = field_position.saturating_sub(VIEWPORT_HEIGHT - PADDING);
+        }
     }
 
     fn start_editing(&mut self) -> Result<()> {
@@ -1165,8 +1556,13 @@ impl App {
             self.editing_field = Some(self.current_field.clone());
             self.edit_buffer = match self.current_field {
                 FormField::Label => plist.label.clone().unwrap_or_default(),
+                FormField::Program => plist.program.clone().unwrap_or_default(),
                 FormField::StartInterval => plist
                     .start_interval
+                    .map(|i| i.to_string())
+                    .unwrap_or_default(),
+                FormField::ThrottleInterval => plist
+                    .throttle_interval
                     .map(|i| i.to_string())
                     .unwrap_or_default(),
                 FormField::RunAtLoad => if plist.run_at_load.unwrap_or(false) {
@@ -1181,14 +1577,62 @@ impl App {
                     "false"
                 }
                 .to_string(),
+                FormField::AbandonProcessGroup => if plist.abandon_process_group.unwrap_or(false) {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+                FormField::EnablePressuredExit => if plist.enable_pressured_exit.unwrap_or(false) {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+                FormField::EnableTransactions => if plist.enable_transactions.unwrap_or(false) {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+                FormField::EventMonitor => if plist.event_monitor.unwrap_or(false) {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
                 FormField::StandardOutPath => plist.standard_out_path.clone().unwrap_or_default(),
                 FormField::StandardErrorPath => {
                     plist.standard_error_path.clone().unwrap_or_default()
                 }
                 FormField::WorkingDirectory => plist.working_directory.clone().unwrap_or_default(),
+                FormField::POSIXSpawnType => plist.posix_spawn_type.clone().unwrap_or_default(),
                 FormField::ProgramArguments => {
                     if let Some(args) = &plist.program_arguments {
                         args.join("\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                FormField::AssociatedBundleIdentifiers => {
+                    if let Some(ids) = &plist.associated_bundle_identifiers {
+                        ids.join("\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                FormField::LimitLoadToSessionType => match &plist.limit_load_to_session_type {
+                    Some(LimitLoadToSessionType::Single(s)) => s.clone(),
+                    Some(LimitLoadToSessionType::Multiple(v)) => v.join("\n"),
+                    None => String::new(),
+                },
+                FormField::EnvironmentVariables => {
+                    if let Some(env_vars) = &plist.environment_variables {
+                        env_vars
+                            .iter()
+                            .map(|(k, v)| format!("{}={}", k, v))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     } else {
                         String::new()
                     }
@@ -1244,14 +1688,33 @@ impl App {
                 FormField::Label => {
                     plist.label = (!self.edit_buffer.is_empty()).then(|| self.edit_buffer.clone());
                 }
+                FormField::Program => {
+                    plist.program =
+                        (!self.edit_buffer.is_empty()).then(|| self.edit_buffer.clone());
+                }
                 FormField::StartInterval => {
                     plist.start_interval = self.edit_buffer.parse().ok();
+                }
+                FormField::ThrottleInterval => {
+                    plist.throttle_interval = self.edit_buffer.parse().ok();
                 }
                 FormField::RunAtLoad => {
                     plist.run_at_load = Some(self.edit_buffer == "true");
                 }
                 FormField::KeepAlive => {
                     plist.keep_alive = Some(self.edit_buffer == "true");
+                }
+                FormField::AbandonProcessGroup => {
+                    plist.abandon_process_group = Some(self.edit_buffer == "true");
+                }
+                FormField::EnablePressuredExit => {
+                    plist.enable_pressured_exit = Some(self.edit_buffer == "true");
+                }
+                FormField::EnableTransactions => {
+                    plist.enable_transactions = Some(self.edit_buffer == "true");
+                }
+                FormField::EventMonitor => {
+                    plist.event_monitor = Some(self.edit_buffer == "true");
                 }
                 FormField::StandardOutPath => {
                     plist.standard_out_path =
@@ -1265,6 +1728,10 @@ impl App {
                     plist.working_directory =
                         (!self.edit_buffer.is_empty()).then(|| self.edit_buffer.clone());
                 }
+                FormField::POSIXSpawnType => {
+                    plist.posix_spawn_type =
+                        (!self.edit_buffer.is_empty()).then(|| self.edit_buffer.clone());
+                }
                 FormField::ProgramArguments => {
                     let args: Vec<String> = self
                         .edit_buffer
@@ -1273,6 +1740,47 @@ impl App {
                         .filter(|line| !line.is_empty())
                         .collect();
                     plist.program_arguments = (!args.is_empty()).then_some(args);
+                }
+                FormField::AssociatedBundleIdentifiers => {
+                    let ids: Vec<String> = self
+                        .edit_buffer
+                        .lines()
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect();
+                    plist.associated_bundle_identifiers = (!ids.is_empty()).then_some(ids);
+                }
+                FormField::LimitLoadToSessionType => {
+                    if self.edit_buffer.is_empty() {
+                        plist.limit_load_to_session_type = None;
+                    } else {
+                        let lines: Vec<String> = self
+                            .edit_buffer
+                            .lines()
+                            .map(|line| line.trim().to_string())
+                            .filter(|line| !line.is_empty())
+                            .collect();
+                        if lines.len() == 1 {
+                            plist.limit_load_to_session_type =
+                                Some(LimitLoadToSessionType::Single(lines[0].clone()));
+                        } else if lines.len() > 1 {
+                            plist.limit_load_to_session_type =
+                                Some(LimitLoadToSessionType::Multiple(lines));
+                        }
+                    }
+                }
+                FormField::EnvironmentVariables => {
+                    let mut env_vars = std::collections::HashMap::new();
+                    for line in self.edit_buffer.lines() {
+                        let line = line.trim();
+                        if !line.is_empty()
+                            && line.contains('=')
+                            && let Some((key, value)) = line.split_once('=')
+                        {
+                            env_vars.insert(key.trim().to_string(), value.trim().to_string());
+                        }
+                    }
+                    plist.environment_variables = (!env_vars.is_empty()).then_some(env_vars);
                 }
             }
             self.set_status_message(format!("✓ Updated {}", self.get_editing_field_name()));
@@ -1382,6 +1890,7 @@ impl App {
             self.current_tab = new_tab;
             self.selected_plist = None; // Clear selected plist when switching tabs
             self.filter_text.clear(); // Clear search filter
+            self.form_scroll_offset = 0; // Reset scroll position
 
             // Reset list selection to first item if available
             let current_agents = self.get_current_agents();
@@ -1455,6 +1964,99 @@ impl App {
         if let Some(workdir) = &plist.working_directory {
             xml.push_str("    <key>WorkingDirectory</key>\n");
             xml.push_str(&format!("    <string>{}</string>\n", workdir));
+            xml.push_str("    \n");
+        }
+
+        if let Some(program) = &plist.program {
+            xml.push_str("    <key>Program</key>\n");
+            xml.push_str(&format!("    <string>{}</string>\n", program));
+            xml.push_str("    \n");
+        }
+
+        if let Some(interval) = plist.throttle_interval {
+            xml.push_str("    <key>ThrottleInterval</key>\n");
+            xml.push_str(&format!("    <integer>{}</integer>\n", interval));
+            xml.push_str("    \n");
+        }
+
+        if let Some(abandon) = plist.abandon_process_group {
+            xml.push_str("    <key>AbandonProcessGroup</key>\n");
+            xml.push_str(&format!(
+                "    <{}/>\n",
+                if abandon { "true" } else { "false" }
+            ));
+            xml.push_str("    \n");
+        }
+
+        if let Some(pressured) = plist.enable_pressured_exit {
+            xml.push_str("    <key>EnablePressuredExit</key>\n");
+            xml.push_str(&format!(
+                "    <{}/>\n",
+                if pressured { "true" } else { "false" }
+            ));
+            xml.push_str("    \n");
+        }
+
+        if let Some(transactions) = plist.enable_transactions {
+            xml.push_str("    <key>EnableTransactions</key>\n");
+            xml.push_str(&format!(
+                "    <{}/>\n",
+                if transactions { "true" } else { "false" }
+            ));
+            xml.push_str("    \n");
+        }
+
+        if let Some(monitor) = plist.event_monitor {
+            xml.push_str("    <key>EventMonitor</key>\n");
+            xml.push_str(&format!(
+                "    <{}/>\n",
+                if monitor { "true" } else { "false" }
+            ));
+            xml.push_str("    \n");
+        }
+
+        if let Some(spawn_type) = &plist.posix_spawn_type {
+            xml.push_str("    <key>POSIXSpawnType</key>\n");
+            xml.push_str(&format!("    <string>{}</string>\n", spawn_type));
+            xml.push_str("    \n");
+        }
+
+        if let Some(ids) = &plist.associated_bundle_identifiers {
+            xml.push_str("    <key>AssociatedBundleIdentifiers</key>\n");
+            xml.push_str("    <array>\n");
+            for id in ids {
+                xml.push_str(&format!("        <string>{}</string>\n", id));
+            }
+            xml.push_str("    </array>\n");
+            xml.push_str("    \n");
+        }
+
+        if let Some(session_type) = &plist.limit_load_to_session_type {
+            xml.push_str("    <key>LimitLoadToSessionType</key>\n");
+            match session_type {
+                LimitLoadToSessionType::Single(s) => {
+                    xml.push_str(&format!("    <string>{}</string>\n", s));
+                }
+                LimitLoadToSessionType::Multiple(sessions) => {
+                    xml.push_str("    <array>\n");
+                    for session in sessions {
+                        xml.push_str(&format!("        <string>{}</string>\n", session));
+                    }
+                    xml.push_str("    </array>\n");
+                }
+            }
+            xml.push_str("    \n");
+        }
+
+        if let Some(env_vars) = &plist.environment_variables {
+            xml.push_str("    <key>EnvironmentVariables</key>\n");
+            xml.push_str("    <dict>\n");
+            for (key, value) in env_vars {
+                xml.push_str(&format!("        <key>{}</key>\n", key));
+                xml.push_str(&format!("        <string>{}</string>\n", value));
+            }
+            xml.push_str("    </dict>\n");
+            xml.push_str("    \n");
         }
 
         xml.push_str("</dict>\n");
@@ -1475,15 +2077,62 @@ fn parse_plist_xml(content: &str) -> Result<PlistData> {
     let mut in_dict = false;
     let mut current_key = String::new();
     let mut program_args = Vec::new();
+    let mut bundle_identifiers = Vec::new();
+    let mut session_types = Vec::new();
+    let mut env_vars = std::collections::HashMap::new();
     let mut collecting_array = false;
+    let mut collecting_env_dict = false;
+    let mut env_key = String::new();
+    let mut array_type = String::new();
 
     while i < lines.len() {
         let line = lines[i].trim();
 
-        if line == "<dict>" {
-            in_dict = true;
+        if line == "<dict>" && !collecting_env_dict {
+            if current_key == "EnvironmentVariables" {
+                collecting_env_dict = true;
+            } else {
+                in_dict = true;
+            }
         } else if line == "</dict>" {
-            in_dict = false;
+            if collecting_env_dict {
+                collecting_env_dict = false;
+                plist_data.environment_variables = Some(env_vars.clone());
+                current_key.clear();
+            } else {
+                in_dict = false;
+            }
+        } else if line == "<array>" {
+            collecting_array = true;
+            array_type = current_key.clone();
+            match array_type.as_str() {
+                "ProgramArguments" => program_args.clear(),
+                "AssociatedBundleIdentifiers" => bundle_identifiers.clear(),
+                "LimitLoadToSessionType" => session_types.clear(),
+                _ => {}
+            }
+        } else if line == "</array>" {
+            collecting_array = false;
+            match array_type.as_str() {
+                "ProgramArguments" => {
+                    plist_data.program_arguments = Some(program_args.clone());
+                }
+                "AssociatedBundleIdentifiers" => {
+                    plist_data.associated_bundle_identifiers = Some(bundle_identifiers.clone());
+                }
+                "LimitLoadToSessionType" => {
+                    plist_data.limit_load_to_session_type =
+                        Some(LimitLoadToSessionType::Multiple(session_types.clone()));
+                }
+                _ => {}
+            }
+            current_key.clear();
+        } else if collecting_env_dict && line.starts_with("<key>") && line.ends_with("</key>") {
+            env_key = line[5..line.len() - 6].to_string();
+        } else if collecting_env_dict && line.starts_with("<string>") && line.ends_with("</string>")
+        {
+            env_vars.insert(env_key.clone(), line[8..line.len() - 9].to_string());
+            env_key.clear();
         } else if in_dict && line.starts_with("<key>") && line.ends_with("</key>") {
             current_key = line[5..line.len() - 6].to_string();
         } else if in_dict && !current_key.is_empty() {
@@ -1491,48 +2140,66 @@ fn parse_plist_xml(content: &str) -> Result<PlistData> {
                 "Label" if line.starts_with("<string>") => {
                     plist_data.label = Some(line[8..line.len() - 9].to_string());
                 }
-                "StartInterval" if line.starts_with("<integer>") => {
+                "Program" if line.starts_with("<string>") => {
+                    plist_data.program = Some(line[8..line.len() - 9].to_string());
+                }
+                "StartInterval" | "ThrottleInterval" if line.starts_with("<integer>") => {
                     if let Ok(val) = line[9..line.len() - 10].parse() {
-                        plist_data.start_interval = Some(val);
+                        match current_key.as_str() {
+                            "StartInterval" => plist_data.start_interval = Some(val),
+                            "ThrottleInterval" => plist_data.throttle_interval = Some(val),
+                            _ => {}
+                        }
                     }
                 }
-                "RunAtLoad" if line == "<true/>" => {
-                    plist_data.run_at_load = Some(true);
+                "RunAtLoad"
+                | "KeepAlive"
+                | "AbandonProcessGroup"
+                | "EnablePressuredExit"
+                | "EnableTransactions"
+                | "EventMonitor" => {
+                    let value = line == "<true/>";
+                    match current_key.as_str() {
+                        "RunAtLoad" => plist_data.run_at_load = Some(value),
+                        "KeepAlive" => plist_data.keep_alive = Some(value),
+                        "AbandonProcessGroup" => plist_data.abandon_process_group = Some(value),
+                        "EnablePressuredExit" => plist_data.enable_pressured_exit = Some(value),
+                        "EnableTransactions" => plist_data.enable_transactions = Some(value),
+                        "EventMonitor" => plist_data.event_monitor = Some(value),
+                        _ => {}
+                    }
                 }
-                "RunAtLoad" if line == "<false/>" => {
-                    plist_data.run_at_load = Some(false);
+                "StandardOutPath" | "StandardErrorPath" | "WorkingDirectory" | "POSIXSpawnType"
+                    if line.starts_with("<string>") =>
+                {
+                    let value = line[8..line.len() - 9].to_string();
+                    match current_key.as_str() {
+                        "StandardOutPath" => plist_data.standard_out_path = Some(value),
+                        "StandardErrorPath" => plist_data.standard_error_path = Some(value),
+                        "WorkingDirectory" => plist_data.working_directory = Some(value),
+                        "POSIXSpawnType" => plist_data.posix_spawn_type = Some(value),
+                        _ => {}
+                    }
                 }
-                "KeepAlive" if line == "<true/>" => {
-                    plist_data.keep_alive = Some(true);
-                }
-                "KeepAlive" if line == "<false/>" => {
-                    plist_data.keep_alive = Some(false);
-                }
-                "StandardOutPath" if line.starts_with("<string>") => {
-                    plist_data.standard_out_path = Some(line[8..line.len() - 9].to_string());
-                }
-                "StandardErrorPath" if line.starts_with("<string>") => {
-                    plist_data.standard_error_path = Some(line[8..line.len() - 9].to_string());
-                }
-                "WorkingDirectory" if line.starts_with("<string>") => {
-                    plist_data.working_directory = Some(line[8..line.len() - 9].to_string());
-                }
-                "ProgramArguments" if line == "<array>" => {
-                    collecting_array = true;
-                    program_args.clear();
-                }
-                "ProgramArguments" if line == "</array>" => {
-                    collecting_array = false;
-                    plist_data.program_arguments = Some(program_args.clone());
+                "LimitLoadToSessionType" if line.starts_with("<string>") => {
+                    plist_data.limit_load_to_session_type = Some(LimitLoadToSessionType::Single(
+                        line[8..line.len() - 9].to_string(),
+                    ));
                 }
                 _ => {}
             }
 
             if collecting_array && line.starts_with("<string>") && line.ends_with("</string>") {
-                program_args.push(line[8..line.len() - 9].to_string());
+                let value = line[8..line.len() - 9].to_string();
+                match array_type.as_str() {
+                    "ProgramArguments" => program_args.push(value),
+                    "AssociatedBundleIdentifiers" => bundle_identifiers.push(value),
+                    "LimitLoadToSessionType" => session_types.push(value),
+                    _ => {}
+                }
             }
 
-            if !collecting_array {
+            if !collecting_array && !collecting_env_dict {
                 current_key.clear();
             }
         }
