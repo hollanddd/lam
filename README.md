@@ -1,7 +1,7 @@
 # LAM - Launch Agent Manager
 
 <div align="center">
-  <img src="assets/loop.gif" alt="LAM Logo" />
+  <img src="assets/demo.gif" alt="LAM Logo" />
 </div>
 
 ---
