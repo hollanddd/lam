@@ -58,9 +58,20 @@ LAM (Launch Agent Manager) is a modern, feature-rich terminal user interface (TU
 ### Prerequisites
 
 - macOS (required for LaunchAgent functionality)
-- Rust toolchain (latest stable)
+
+### Homebrew (Recommended)
+
+```bash
+# Add the tap
+brew tap hollanddd/homebrew-tap
+
+# Install LAM
+brew install lam
+```
 
 ### Build from Source
+
+**Prerequisites**: Rust toolchain (latest stable)
 
 ```bash
 git clone https://github.com/hollanddd/lam.git
