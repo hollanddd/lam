@@ -1,6 +1,6 @@
 [package]
 name = "lam"
-version = "0.1.1"
+version = "0.1.2"
 description = "Launch Agent Manager"
 authors = ["Darren <me@darrenholland.com>"]
 license = "MIT"
