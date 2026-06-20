@@ -64,6 +64,9 @@ pub struct App {
     filter_text: String,
     showing_exit_confirmation: bool,
     form_scroll_offset: u16,
+    log_view: LogView,
+    log_scroll_offset: u16,
+    log_lines: Vec<String>,
     loading: bool,
     loading_message: String,
     loading_progress: f32,
@@ -91,6 +94,13 @@ enum Focus {
     Search,
     Sidebar,
     Form,
+    Logs,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LogView {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -226,6 +236,9 @@ impl App {
             filter_text: String::new(),
             showing_exit_confirmation: false,
             form_scroll_offset: 0,
+            log_view: LogView::Stdout,
+            log_scroll_offset: 0,
+            log_lines: Vec::new(),
             loading: true,
             loading_message: "Initializing Launch Agent Manager...".to_string(),
             loading_progress: 0.0,
@@ -289,6 +302,9 @@ impl App {
             filter_text: String::new(),
             showing_exit_confirmation: false,
             form_scroll_offset: 0,
+            log_view: LogView::Stdout,
+            log_scroll_offset: 0,
+            log_lines: Vec::new(),
             loading: true,
             loading_message: "🚀 Starting Launch Agent Manager...".to_string(),
             loading_progress: 0.0,
@@ -411,7 +427,9 @@ impl App {
 
                 let plist_data = self.parse_plist(&content)?;
                 self.selected_plist = Some(plist_data);
-                self.form_scroll_offset = 0; // Reset scroll position for new plist
+                self.form_scroll_offset = 0;
+                self.log_lines.clear();
+                self.log_scroll_offset = 0;
             }
         }
         Ok(())
@@ -520,7 +538,11 @@ impl App {
         self.draw_tab_bar(frame, main_chunks[0]);
         self.draw_search_bar(frame, main_chunks[1]);
         self.draw_sidebar(frame, content_chunks[0]);
-        self.draw_main_panel(frame, content_chunks[1]);
+        if self.focus == Focus::Logs {
+            self.draw_log_panel(frame, content_chunks[1]);
+        } else {
+            self.draw_main_panel(frame, content_chunks[1]);
+        }
         self.draw_status_bar(frame, main_chunks[3]);
 
         // Draw exit confirmation dialog if showing
@@ -1242,8 +1264,12 @@ impl App {
                     "📋",
                 ),
                 Focus::Form => (
-                    "j/k=Navigate Fields, Enter=Edit, PgUp/PgDn=Scroll, Ctrl+S=Save | Tab=Switch Panel, 1/2/3=Switch Tabs".to_string(),
+                    "j/k=Navigate Fields, Enter=Edit, PgUp/PgDn=Scroll, Ctrl+S=Save, l=Logs | Tab=Switch Panel, 1/2/3=Switch Tabs".to_string(),
                     "⚙️",
+                ),
+                Focus::Logs => (
+                    "j/k=Scroll, g/G=Top/Bottom, PgUp/PgDn=Page, t=Toggle stdout/stderr, r=Refresh | Tab=Switch Panel".to_string(),
+                    "📜",
                 ),
             };
             (text, Style::default().fg(Theme::ACCENT_MUTED), icon)
@@ -1557,11 +1583,19 @@ impl App {
                     self.focus = match self.focus {
                         Focus::Search => Focus::Sidebar,
                         Focus::Sidebar => Focus::Form,
-                        Focus::Form => Focus::Search,
+                        Focus::Form => Focus::Logs,
+                        Focus::Logs => Focus::Search,
                     };
+                    if self.focus == Focus::Logs {
+                        self.refresh_log_content();
+                    }
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('s') | KeyCode::Char('S')) => {
                     self.save_plist()?;
+                }
+                (_, KeyCode::Char('l')) => {
+                    self.focus = Focus::Logs;
+                    self.refresh_log_content();
                 }
                 (_, KeyCode::Char('/')) => {
                     self.focus = Focus::Search;
@@ -1579,6 +1613,7 @@ impl App {
                     Focus::Search => self.handle_search_keys(key)?,
                     Focus::Sidebar => self.handle_sidebar_keys(key)?,
                     Focus::Form => self.handle_form_keys(key)?,
+                    Focus::Logs => self.handle_log_keys(key)?,
                 },
             }
         }
@@ -1881,11 +1916,6 @@ impl App {
             KeyCode::Backspace => {
                 self.edit_buffer.pop();
             }
-            // Block vim navigation keys during editing
-            KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('g') | KeyCode::Char('G') => {
-                // These are vim navigation keys - ignore them during editing
-                // Don't add them to the edit buffer
-            }
             KeyCode::Char(c) => {
                 self.edit_buffer.push(c);
             }
@@ -2018,8 +2048,17 @@ impl App {
                 let filtered_agents = self.get_filtered_agents();
                 if let Some(agent) = filtered_agents.get(selected) {
                     let file_path = self.get_current_directory().join(&agent.filename);
-                    let xml_content = self.plist_to_xml(plist)?;
-                    fs::write(&file_path, xml_content)?;
+                    let xml_content = match self.plist_to_xml(plist) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            self.set_status_message(format!("✗ Failed to serialize: {}", e));
+                            return Ok(());
+                        }
+                    };
+                    if let Err(e) = fs::write(&file_path, &xml_content) {
+                        self.set_status_message(format!("✗ Failed to save: {}", e));
+                        return Ok(());
+                    }
 
                     // Reload the agent with launchctl
                     match self.reload_agent(file_path.to_owned()) {
@@ -2111,9 +2150,11 @@ impl App {
     fn switch_to_tab(&mut self, new_tab: TabLocation) {
         if self.current_tab != new_tab {
             self.current_tab = new_tab;
-            self.selected_plist = None; // Clear selected plist when switching tabs
-            self.filter_text.clear(); // Clear search filter
-            self.form_scroll_offset = 0; // Reset scroll position
+            self.selected_plist = None;
+            self.filter_text.clear();
+            self.form_scroll_offset = 0;
+            self.log_lines.clear();
+            self.log_scroll_offset = 0;
 
             // Reset list selection to first item if available
             let current_agents = self.get_current_agents();
@@ -2125,6 +2166,13 @@ impl App {
         }
     }
 
+    fn xml_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
     pub fn plist_to_xml(&self, plist: &PlistData) -> Result<String> {
         let mut xml = String::new();
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -2134,7 +2182,7 @@ impl App {
 
         if let Some(label) = &plist.label {
             xml.push_str("    <key>Label</key>\n");
-            xml.push_str(&format!("    <string>{}</string>\n", label));
+            xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(label)));
             xml.push_str("    \n");
         }
 
@@ -2142,7 +2190,7 @@ impl App {
             xml.push_str("    <key>ProgramArguments</key>\n");
             xml.push_str("    <array>\n");
             for arg in args {
-                xml.push_str(&format!("        <string>{}</string>\n", arg));
+                xml.push_str(&format!("        <string>{}</string>\n", Self::xml_escape(arg)));
             }
             xml.push_str("    </array>\n");
             xml.push_str("    \n");
@@ -2174,25 +2222,25 @@ impl App {
 
         if let Some(stdout) = &plist.standard_out_path {
             xml.push_str("    <key>StandardOutPath</key>\n");
-            xml.push_str(&format!("    <string>{}</string>\n", stdout));
+            xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(stdout)));
             xml.push_str("    \n");
         }
 
         if let Some(stderr) = &plist.standard_error_path {
             xml.push_str("    <key>StandardErrorPath</key>\n");
-            xml.push_str(&format!("    <string>{}</string>\n", stderr));
+            xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(stderr)));
             xml.push_str("    \n");
         }
 
         if let Some(workdir) = &plist.working_directory {
             xml.push_str("    <key>WorkingDirectory</key>\n");
-            xml.push_str(&format!("    <string>{}</string>\n", workdir));
+            xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(workdir)));
             xml.push_str("    \n");
         }
 
         if let Some(program) = &plist.program {
             xml.push_str("    <key>Program</key>\n");
-            xml.push_str(&format!("    <string>{}</string>\n", program));
+            xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(program)));
             xml.push_str("    \n");
         }
 
@@ -2240,7 +2288,7 @@ impl App {
 
         if let Some(spawn_type) = &plist.posix_spawn_type {
             xml.push_str("    <key>POSIXSpawnType</key>\n");
-            xml.push_str(&format!("    <string>{}</string>\n", spawn_type));
+            xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(spawn_type)));
             xml.push_str("    \n");
         }
 
@@ -2248,7 +2296,7 @@ impl App {
             xml.push_str("    <key>AssociatedBundleIdentifiers</key>\n");
             xml.push_str("    <array>\n");
             for id in ids {
-                xml.push_str(&format!("        <string>{}</string>\n", id));
+                xml.push_str(&format!("        <string>{}</string>\n", Self::xml_escape(id)));
             }
             xml.push_str("    </array>\n");
             xml.push_str("    \n");
@@ -2258,12 +2306,12 @@ impl App {
             xml.push_str("    <key>LimitLoadToSessionType</key>\n");
             match session_type {
                 LimitLoadToSessionType::Single(s) => {
-                    xml.push_str(&format!("    <string>{}</string>\n", s));
+                    xml.push_str(&format!("    <string>{}</string>\n", Self::xml_escape(s)));
                 }
                 LimitLoadToSessionType::Multiple(sessions) => {
                     xml.push_str("    <array>\n");
                     for session in sessions {
-                        xml.push_str(&format!("        <string>{}</string>\n", session));
+                        xml.push_str(&format!("        <string>{}</string>\n", Self::xml_escape(session)));
                     }
                     xml.push_str("    </array>\n");
                 }
@@ -2275,8 +2323,8 @@ impl App {
             xml.push_str("    <key>EnvironmentVariables</key>\n");
             xml.push_str("    <dict>\n");
             for (key, value) in env_vars {
-                xml.push_str(&format!("        <key>{}</key>\n", key));
-                xml.push_str(&format!("        <string>{}</string>\n", value));
+                xml.push_str(&format!("        <key>{}</key>\n", Self::xml_escape(key)));
+                xml.push_str(&format!("        <string>{}</string>\n", Self::xml_escape(value)));
             }
             xml.push_str("    </dict>\n");
             xml.push_str("    \n");
@@ -2285,6 +2333,216 @@ impl App {
         xml.push_str("</dict>\n");
         xml.push_str("</plist>\n");
         Ok(xml)
+    }
+
+    fn refresh_log_content(&mut self) {
+        let path: Option<String> = match self.log_view {
+            LogView::Stdout => self
+                .selected_plist
+                .as_ref()
+                .and_then(|p| p.standard_out_path.as_deref().map(|s| s.to_string())),
+            LogView::Stderr => self
+                .selected_plist
+                .as_ref()
+                .and_then(|p| p.standard_error_path.as_deref().map(|s| s.to_string())),
+        };
+
+        self.log_lines = match path {
+            Some(ref p) if std::path::Path::new(p).exists() => {
+                let content = fs::read_to_string(p).unwrap_or_default();
+                const MAX_LINES: usize = 10_000;
+                let all: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                let start = all.len().saturating_sub(MAX_LINES);
+                all[start..].to_vec()
+            }
+            _ => Vec::new(),
+        };
+
+        self.log_scroll_offset = 0;
+    }
+
+    fn handle_log_keys(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.log_scroll_offset = self.log_scroll_offset.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(1);
+            }
+            KeyCode::Char('g') => {
+                self.log_scroll_offset = 0;
+            }
+            KeyCode::Char('G') => {
+                self.log_scroll_offset = self.log_lines.len().saturating_sub(20) as u16;
+            }
+            KeyCode::PageDown => {
+                self.log_scroll_offset = self.log_scroll_offset.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(10);
+            }
+            KeyCode::Char('t') => {
+                self.log_view = match self.log_view {
+                    LogView::Stdout => LogView::Stderr,
+                    LogView::Stderr => LogView::Stdout,
+                };
+                self.refresh_log_content();
+            }
+            KeyCode::Char('r') => {
+                self.refresh_log_content();
+                self.set_status_message("✓ Log refreshed".to_string());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn draw_log_panel(&mut self, frame: &mut Frame, area: Rect) {
+        let (border_style, title_style) = (
+            Style::default().fg(Theme::BORDER_FOCUSED),
+            Style::default()
+                .fg(Theme::ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        let log_path: Option<String> = match self.log_view {
+            LogView::Stdout => self
+                .selected_plist
+                .as_ref()
+                .and_then(|p| p.standard_out_path.as_deref().map(|s| s.to_string())),
+            LogView::Stderr => self
+                .selected_plist
+                .as_ref()
+                .and_then(|p| p.standard_error_path.as_deref().map(|s| s.to_string())),
+        };
+
+        let stdout_style = if self.log_view == LogView::Stdout {
+            Style::default()
+                .fg(Theme::ACCENT_SECONDARY)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Theme::TEXT_DIM)
+        };
+        let stderr_style = if self.log_view == LogView::Stderr {
+            Style::default()
+                .fg(Theme::ACCENT_ERROR)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Theme::TEXT_DIM)
+        };
+
+        let line_count = self.log_lines.len();
+        let count_suffix = if line_count > 0 {
+            format!("  ({} lines)", line_count)
+        } else {
+            String::new()
+        };
+
+        let title_line = Line::from(vec![
+            Span::styled("📜 Logs  ", title_style),
+            Span::styled("stdout", stdout_style),
+            Span::styled(" | ", Style::default().fg(Theme::SUBTLE)),
+            Span::styled("stderr", stderr_style),
+            Span::styled(count_suffix, Style::default().fg(Theme::TEXT_DIM)),
+        ]);
+
+        let text: Vec<Line> = if self.selected_plist.is_none() {
+            vec![
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "Select an agent from the sidebar to view logs",
+                    Style::default()
+                        .fg(Theme::TEXT_DIM)
+                        .add_modifier(Modifier::ITALIC),
+                )]),
+            ]
+        } else {
+            match log_path {
+                None => {
+                    let label = match self.log_view {
+                        LogView::Stdout => "StandardOutPath",
+                        LogView::Stderr => "StandardErrorPath",
+                    };
+                    vec![
+                        Line::from(""),
+                        Line::from(vec![Span::styled(
+                            format!("No {} configured for this agent", label),
+                            Style::default()
+                                .fg(Theme::TEXT_DIM)
+                                .add_modifier(Modifier::ITALIC),
+                        )]),
+                        Line::from(""),
+                        Line::from(vec![Span::styled(
+                            "Set the path in the agent editor (Tab to switch panels)",
+                            Style::default().fg(Theme::SUBTLE),
+                        )]),
+                    ]
+                }
+                Some(ref path) => {
+                    if self.log_lines.is_empty() {
+                        if std::path::Path::new(path).exists() {
+                            vec![
+                                Line::from(vec![Span::styled(
+                                    path.as_str(),
+                                    Style::default().fg(Theme::SUBTLE),
+                                )]),
+                                Line::from(""),
+                                Line::from(vec![Span::styled(
+                                    "Log file is empty",
+                                    Style::default()
+                                        .fg(Theme::TEXT_DIM)
+                                        .add_modifier(Modifier::ITALIC),
+                                )]),
+                            ]
+                        } else {
+                            vec![
+                                Line::from(vec![Span::styled(
+                                    "Log file not found:",
+                                    Style::default().fg(Theme::ACCENT_ERROR),
+                                )]),
+                                Line::from(""),
+                                Line::from(vec![Span::styled(
+                                    path.as_str(),
+                                    Style::default().fg(Theme::SUBTLE),
+                                )]),
+                            ]
+                        }
+                    } else {
+                        let mut lines: Vec<Line> = vec![
+                            Line::from(vec![Span::styled(
+                                path.as_str(),
+                                Style::default().fg(Theme::SUBTLE),
+                            )]),
+                            Line::from(""),
+                        ];
+                        lines.extend(self.log_lines.iter().enumerate().map(|(i, line)| {
+                            Line::from(vec![
+                                Span::styled(
+                                    format!("{:5} │ ", i + 1),
+                                    Style::default().fg(Theme::SUBTLE),
+                                ),
+                                Span::styled(line.clone(), Style::default().fg(Theme::FOREGROUND)),
+                            ])
+                        }));
+                        lines
+                    }
+                }
+            }
+        };
+
+        let paragraph = Paragraph::new(text)
+            .block(
+                Block::default()
+                    .title(title_line)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(border_style)
+                    .style(Style::default().bg(Theme::BACKGROUND))
+                    .padding(ratatui::widgets::Padding::uniform(1)),
+            )
+            .scroll((self.log_scroll_offset, 0));
+
+        frame.render_widget(paragraph, area);
     }
 
     fn quit(&mut self) {
