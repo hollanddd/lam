@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/hollanddd/lam/compare/v0.1.2...v0.1.3) - 2026-06-20
+
+### Added
+
+- view logs
+
+### Other
+
+- *(deps)* bump actions/checkout from 4 to 7
+- *(deps)* bump tokio from 1.47.1 to 1.50.0
+- *(deps)* bump quick-xml from 0.38.1 to 0.39.0
+- *(deps)* bump ratatui from 0.29.0 to 0.30.0
+
 ## [0.1.2](https://github.com/hollanddd/lam/compare/v0.1.1...v0.1.2) - 2025-08-14
 
 ### Other
